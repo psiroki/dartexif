@@ -1,9 +1,10 @@
-import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
 
+import 'random_access_blob.dart';
+
 class LineReader {
-  RandomAccessFile file;
+  RandomAccessBlob file;
   List<int> buffer;
   bool endoffile = false;
 

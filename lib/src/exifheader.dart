@@ -1,6 +1,6 @@
-import 'dart:io';
-import 'package:sprintf/sprintf.dart' show sprintf;
+import 'dart:async';
 
+import 'random_access_blob.dart';
 import 'util.dart';
 import 'tags.dart';
 import 'makernote_apple.dart';
@@ -85,8 +85,8 @@ class IfdTagImpl extends IfdTag {
   String toString() => printable;
 
   String get repr {
-    return sprintf('(0x%04X) %s=%s @ %d',
-        [tag, FIELD_TYPES[field_type][2], printable, field_offset]);
+    return "(0x${tag.toRadixString(16).padLeft(4, '0')}) "
+      "${FIELD_TYPES[field_type][2]}=${printable} @ ${field_offset}";
     // except:
     //     s = '(%s) %s=%s @ %s' % (str(this.tag),
     //                              FIELD_TYPES[this.field_type][2],
@@ -97,7 +97,7 @@ class IfdTagImpl extends IfdTag {
 
 // Handle an EXIF header.
 class ExifHeader {
-  RandomAccessFile file;
+  RandomAccessBlob file;
   var endian;
   int offset;
   bool fake_exif;
@@ -117,9 +117,9 @@ class ExifHeader {
   // start of the EXIF information.
   // For some cameras that use relative tags, this offset may be relative
   // to some other starting point.
-  int s2n(int offset, int length, [signed = false]) {
-    file.setPositionSync(this.offset + offset);
-    List<int> sliced = file.readSync(length);
+  Future<int> s2n(int offset, int length, [signed = false]) async {
+    file.setPosition(this.offset + offset);
+    List<int> sliced = await file.read(length);
     int val;
 
     if (this.endian == 'I'.codeUnitAt(0)) {
@@ -153,14 +153,14 @@ class ExifHeader {
   }
 
   // Return first IFD.
-  int _first_ifd() {
+  Future<int> _first_ifd() {
     return this.s2n(4, 4);
   }
 
   // Return the pointer to next IFD.
-  int _next_ifd(int ifd) {
-    int entries = this.s2n(ifd, 2);
-    int next_ifd = this.s2n(ifd + 2 + 12 * entries, 4);
+  Future<int> _next_ifd(int ifd) async {
+    int entries = await this.s2n(ifd, 2);
+    int next_ifd = await this.s2n(ifd + 2 + 12 * entries, 4);
     if (next_ifd == ifd) {
       return 0;
     } else {
@@ -169,21 +169,21 @@ class ExifHeader {
   }
 
   // Return the list of IFDs in the header.
-  List<int> list_ifd() {
-    int i = _first_ifd();
+  Future<List<int>> list_ifd() async {
+    int i = await _first_ifd();
     List<int> ifds = [];
     while (i > 0) {
       ifds.add(i);
-      i = _next_ifd(i);
+      i = await _next_ifd(i);
     }
     return ifds;
   }
 
   // Return a list of entries in the given IFD.
-  void dump_ifd(int ifd, ifd_name,
+  Future<Null> dump_ifd(int ifd, ifd_name,
       {Map<int, MakerTag> tag_dict: null,
       bool relative: false,
-      String stop_tag}) {
+      String stop_tag}) async {
     stop_tag = stop_tag ?? DEFAULT_STOP_TAG;
 
     if (tag_dict == null) {
@@ -195,16 +195,16 @@ class ExifHeader {
     // make sure we can process the entries
     int entries;
     try {
-      entries = this.s2n(ifd, 2);
+      entries = await this.s2n(ifd, 2);
     } catch (e) {
-      printf("Possibly corrupted IFD: %s", [ifd]);
+      print("Possibly corrupted IFD: ${ifd}");
       return;
     }
 
     for (int i = 0; i < entries; i++) {
       // entry is index of start of this IFD in the file
       int entry = ifd + 2 + 12 * i;
-      int tag = this.s2n(entry, 2);
+      int tag = await this.s2n(entry, 2);
 
       //print('** tag=$tag');
 
@@ -214,14 +214,14 @@ class ExifHeader {
       if (tag_entry != null) {
         tag_name = tag_entry.name;
       } else {
-        tag_name = sprintf('Tag 0x%04X', [tag]);
+        tag_name = "Tag 0x${tag.toRadixString(16).padLeft(4, '0')}";
       }
 
       // print('** ifd=$ifd_name tag=$tag_name ($tag)');
 
       // ignore certain tags for faster processing
       if (this.detailed || !IGNORE_TAGS.contains(tag)) {
-        int field_type = this.s2n(entry + 2, 2);
+        int field_type = await this.s2n(entry + 2, 2);
 
         // unknown field type
         if (field_type <= 0 || field_type >= FIELD_TYPES.length) {
@@ -230,13 +230,13 @@ class ExifHeader {
           if (!this.strict) {
             continue;
           } else {
-            throw new FormatException(
-                sprintf('Unknown type %d in tag 0x%04X', [field_type, tag]));
+            throw new FormatException("Unknown type ${field_type} in "
+              "tag 0x${tag.toRadixString(16).padLeft(4, '0')}");
           }
         }
 
         int type_length = FIELD_TYPES[field_type][0];
-        int count = this.s2n(entry + 4, 4);
+        int count = await this.s2n(entry + 4, 4);
 
         // print('** ifd=$ifd_name tag=$tag_name type=${FIELD_TYPES[field_type]}  len=$type_length, count=$count');
 
@@ -255,13 +255,13 @@ class ExifHeader {
           // other relative offsets, which would have to be computed here
           // slightly differently.
           if (relative) {
-            int tmp_offset = this.s2n(offset, 4);
+            int tmp_offset = await this.s2n(offset, 4);
             offset = tmp_offset + ifd - 8;
             if (this.fake_exif) {
               offset += 18;
             }
           } else {
-            offset = this.s2n(offset, 4);
+            offset = await this.s2n(offset, 4);
           }
         }
 
@@ -281,8 +281,8 @@ class ExifHeader {
             // and count < (2**31))  // 2E31 is hardware dependant. --gd
             int file_position = this.offset + offset;
 
-            this.file.setPositionSync(file_position);
-            values = this.file.readSync(count);
+            this.file.setPosition(file_position);
+            values = await this.file.read(count);
             // Drop any garbage after a null.
             int i = values.indexOf(0);
             if (i >= 0) {
@@ -303,13 +303,13 @@ class ExifHeader {
             for (int dummy = 0; dummy < count; dummy++) {
               if (field_type == 5 || field_type == 10) {
                 // a ratio
-                int n = this.s2n(offset, 4, signed);
-                int d = this.s2n(offset + 4, 4, signed);
+                int n = await this.s2n(offset, 4, signed);
+                int d = await this.s2n(offset + 4, 4, signed);
                 //print('** $n/$d');
                 Ratio r = new Ratio(n, d);
                 values.add(r);
               } else {
-                values.add(this.s2n(offset, type_length, signed));
+                values.add(await this.s2n(offset, type_length, signed));
               }
               offset = offset + type_length;
             }
@@ -318,7 +318,7 @@ class ExifHeader {
           } else if (tag_name == 'MakerNote' ||
               tag_name == makernote_canon.CAMERA_INFO_TAG_NAME) {
             for (int dummy = 0; dummy < count; dummy++) {
-              int value = this.s2n(offset, type_length, signed);
+              int value = await this.s2n(offset, type_length, signed);
               values.add(value);
               offset = offset + type_length;
             }
@@ -352,7 +352,7 @@ class ExifHeader {
           } else if (tag_entry.tags != null) {
             try {
               // print('** ${tag_entry.tags.name} SubIFD at offset ${values[0]}:');
-              this.dump_ifd(values[0], tag_entry.tags.name,
+              await this.dump_ifd(values[0], tag_entry.tags.name,
                   tag_dict: tag_entry.tags.tags, stop_tag: stop_tag);
             } on RangeError {
               // printf('** No values found for %s SubIFD', [tag_entry.tags.name]);
@@ -389,7 +389,7 @@ class ExifHeader {
   // Extract uncompressed TIFF thumbnail.
   // Take advantage of the pre-existing layout in the thumbnail IFD as
   // much as possible
-  void extract_tiff_thumbnail(thumb_ifd) {
+  Future<Null> extract_tiff_thumbnail(thumb_ifd) async {
     IfdTagImpl thumb = this.tags['Thumbnail Compression'];
     if (thumb == null || thumb.printable != 'Uncompressed TIFF') {
       return;
@@ -398,7 +398,7 @@ class ExifHeader {
     List<int> tiff;
     int strip_off = 0, strip_len = 0;
 
-    int entries = this.s2n(thumb_ifd, 2);
+    int entries = await this.s2n(thumb_ifd, 2);
     // this is header plus offset to IFD ...
     if (this.endian == 'M'.codeUnitAt(0)) {
       tiff = 'MM\x00*\x00\x00\x00\x08'.codeUnits;
@@ -407,18 +407,18 @@ class ExifHeader {
       // ... plus thumbnail IFD data plus a null "next IFD" pointer
     }
 
-    this.file.setPositionSync(this.offset + thumb_ifd);
-    tiff.addAll(this.file.readSync(entries * 12 + 2));
+    this.file.setPosition(this.offset + thumb_ifd);
+    tiff.addAll(await this.file.read(entries * 12 + 2));
     tiff.addAll([0, 0, 0, 0]);
 
     // fix up large value offset pointers into data area
     for (int i = 0; i < entries; i++) {
       int entry = thumb_ifd + 2 + 12 * i;
-      int tag = this.s2n(entry, 2);
-      int field_type = this.s2n(entry + 2, 2);
+      int tag = await this.s2n(entry, 2);
+      int field_type = await this.s2n(entry + 2, 2);
       int type_length = FIELD_TYPES[field_type][0];
-      int count = this.s2n(entry + 4, 4);
-      int old_offset = this.s2n(entry + 8, 4);
+      int count = await this.s2n(entry + 4, 4);
+      int old_offset = await this.s2n(entry + 8, 4);
       // start of the 4-byte pointer area in entry
       int ptr = i * 12 + 18;
       // remember strip offsets location
@@ -441,8 +441,8 @@ class ExifHeader {
           strip_len = 4;
         }
         // get original data and store it
-        this.file.setPositionSync(this.offset + old_offset);
-        tiff.addAll(this.file.readSync(count * type_length));
+        this.file.setPosition(this.offset + old_offset);
+        tiff.addAll(await this.file.read(count * type_length));
       }
     }
 
@@ -458,8 +458,8 @@ class ExifHeader {
       tiff.addAll(tiff0.sublist(strip_off + strip_len));
       strip_off += strip_len;
       // add pixel strip to end
-      this.file.setPositionSync(this.offset + old_offsets[i]);
-      tiff.addAll(this.file.readSync(old_counts[i]));
+      this.file.setPosition(this.offset + old_offsets[i]);
+      tiff.addAll(await this.file.read(old_counts[i]));
     }
 
     this.tags['TIFFThumbnail'] = new IfdTagImpl(values: tiff);
@@ -467,12 +467,12 @@ class ExifHeader {
 
   // Extract JPEG thumbnail.
   // (Thankfully the JPEG data is stored as a unit.)
-  extract_jpeg_thumbnail() {
+  Future<Null> extract_jpeg_thumbnail() async {
     IfdTagImpl thumb_offset = this.tags['Thumbnail JPEGInterchangeFormat'];
     if (thumb_offset != null) {
-      this.file.setPositionSync(this.offset + thumb_offset.values[0]);
+      this.file.setPosition(this.offset + thumb_offset.values[0]);
       int size = this.tags['Thumbnail JPEGInterchangeFormatLength'].values[0];
-      this.tags['JPEGThumbnail'] = new IfdTagImpl(values: this.file.readSync(size));
+      this.tags['JPEGThumbnail'] = new IfdTagImpl(values: await this.file.read(size));
     }
 
     // Sometimes in a TIFF file, a JPEG thumbnail is hidden in the MakerNote
@@ -480,9 +480,9 @@ class ExifHeader {
     if (!this.tags.containsKey('JPEGThumbnail')) {
       thumb_offset = this.tags['MakerNote JPEGThumbnail'];
       if (thumb_offset != null) {
-        this.file.setPositionSync(this.offset + thumb_offset.values[0]);
+        this.file.setPosition(this.offset + thumb_offset.values[0]);
         this.tags['JPEGThumbnail'] =
-            new IfdTagImpl(values: this.file.readSync(thumb_offset.field_length));
+            new IfdTagImpl(values: await this.file.read(thumb_offset.field_length));
       }
     }
   }
@@ -505,7 +505,7 @@ class ExifHeader {
   // follow EXIF format internally.  Once they did, it's ambiguous whether
   // the offsets should be from the header at the start of all the EXIF info,
   // or from the header at the start of the makernote.
-  void decode_maker_note() {
+  Future<Null> decode_maker_note() async {
     IfdTagImpl note = this.tags['EXIF MakerNote'];
 
     // Some apps use MakerNote tags but do not use a format for which we
@@ -522,7 +522,7 @@ class ExifHeader {
     if (make.contains('NIKON')) {
       if (list_eq(note.values.sublist(0, 7), [78, 105, 107, 111, 110, 0, 1])) {
         //print("Looks like a type 1 Nikon MakerNote.");
-        this.dump_ifd(note.field_offset + 8, 'MakerNote',
+        await this.dump_ifd(note.field_offset + 8, 'MakerNote',
             tag_dict: makernote_nikon.TAGS_OLD);
       } else if (list_eq(
           note.values.sublist(0, 7), [78, 105, 107, 111, 110, 0, 2])) {
@@ -532,12 +532,12 @@ class ExifHeader {
           throw new FormatException("Missing marker tag '42' in MakerNote.");
           // skip the Makernote label and the TIFF header
         }
-        this.dump_ifd(note.field_offset + 10 + 8, 'MakerNote',
+        await this.dump_ifd(note.field_offset + 10 + 8, 'MakerNote',
             tag_dict: makernote_nikon.TAGS_NEW, relative: true);
       } else {
         // E99x or D1
         //print("Looks like an unlabeled type 2 Nikon MakerNote");
-        this.dump_ifd(note.field_offset, 'MakerNote',
+        await this.dump_ifd(note.field_offset, 'MakerNote',
             tag_dict: makernote_nikon.TAGS_NEW);
       }
       return;
@@ -545,7 +545,7 @@ class ExifHeader {
 
     // Olympus
     if (make.startsWith('OLYMPUS')) {
-      this.dump_ifd(note.field_offset + 8, 'MakerNote',
+      await this.dump_ifd(note.field_offset + 8, 'MakerNote',
           tag_dict: makernote_olympus.TAGS);
       // TODO
       //for i in (('MakerNote Tag 0x2020', makernote.OLYMPUS_TAG_0x2020),):
@@ -555,7 +555,7 @@ class ExifHeader {
 
     // Casio
     if (make.contains('CASIO') || make.contains('Casio')) {
-      this.dump_ifd(note.field_offset, 'MakerNote',
+      await this.dump_ifd(note.field_offset, 'MakerNote',
           tag_dict: makernote_casio.TAGS);
       return;
     }
@@ -571,7 +571,7 @@ class ExifHeader {
       int offset = this.offset;
       this.offset += note.field_offset;
       // process note with bogus values (note is actually at offset 12)
-      this.dump_ifd(12, 'MakerNote', tag_dict: makernote_fujifilm.TAGS);
+      await this.dump_ifd(12, 'MakerNote', tag_dict: makernote_fujifilm.TAGS);
       // reset to correct values
       this.endian = endian;
       this.offset = offset;
@@ -584,14 +584,14 @@ class ExifHeader {
             [65, 112, 112, 108, 101, 32, 105, 79, 83, 0])) {
       int t = this.offset;
       this.offset += note.field_offset + 14;
-      this.dump_ifd(0, 'MakerNote', tag_dict: makernote_apple.TAGS);
+      await this.dump_ifd(0, 'MakerNote', tag_dict: makernote_apple.TAGS);
       this.offset = t;
       return;
     }
 
     // Canon
     if (make == 'Canon') {
-      this.dump_ifd(note.field_offset, 'MakerNote',
+      await this.dump_ifd(note.field_offset, 'MakerNote',
           tag_dict: makernote_canon.TAGS);
 
       for (List i in [
@@ -622,7 +622,7 @@ class ExifHeader {
   }
 
   // TODO Decode Olympus MakerNote tag based on offset within tag
-  void _olympus_decode_tag(List<int> value, mn_tags) {}
+  // void _olympus_decode_tag(List<int> value, mn_tags) {}
 
   // Decode Canon MakerNote tag based on offset within tag.
   // See http://www.burren.cx/david/canon.html by David Burren

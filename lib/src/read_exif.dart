@@ -1,10 +1,12 @@
-import 'dart:io';
+import 'dart:html' as html;
 import 'dart:async';
 
 import 'exifheader.dart';
 import 'util.dart';
 import 'linereader.dart';
 import 'exif_types.dart';
+
+import 'random_access_blob.dart';
 
 
 int _increment_base(data, base) {
@@ -14,14 +16,14 @@ int _increment_base(data, base) {
 // Process an image file (expects an open file object).
 // This is the function that has to deal with all the arbitrary nasty bits
 // of the EXIF standard.
-Future<Map<String, IfdTag>> readExifFromFile(File file,
+Future<Map<String, IfdTag>> readExifFromBlob(html.Blob blob,
     {String stop_tag,
     bool details = true,
     bool strict = false,
     bool debug = false,
     bool truncate_tags = true}) async {
 
-  RandomAccessFile f = await file.open();
+  RandomAccessBlob f = new RandomAccessBlob(blob);
 
   // by default do not fake an EXIF beginning
   bool fake_exif = false;
@@ -72,7 +74,7 @@ Future<Map<String, IfdTag>> readExifFromFile(File file,
     await f.setPosition(0);
     // in theory, this could be insufficient since 64K is the maximum size--gd
     // print('** f.position=${f.positionSync()}, base=$base');
-    data = f.readSync(base + 4000);
+    data = await f.read(base + 4000);
     // print('** data.length=${data.length}');
 
     // base = 2
@@ -201,7 +203,7 @@ Future<Map<String, IfdTag>> readExifFromFile(File file,
 
   ExifHeader hdr = new ExifHeader(
       f, endian, offset, fake_exif, strict, debug, details, truncate_tags);
-  List<int> ifd_list = hdr.list_ifd();
+  List<int> ifd_list = await hdr.list_ifd();
   int thumb_ifd = 0;
   int ctr = 0;
   String ifd_name;
@@ -216,14 +218,14 @@ Future<Map<String, IfdTag>> readExifFromFile(File file,
       ifd_name = 'IFD ' + ctr.toString();
     }
     // print('** IFD $ctr ($ifd_name) at offset $ifd');
-    hdr.dump_ifd(ifd, ifd_name, stop_tag: stop_tag);
+    await hdr.dump_ifd(ifd, ifd_name, stop_tag: stop_tag);
     ctr += 1;
   }
   // EXIF IFD
   IfdTagImpl exif_off = hdr.tags['Image ExifOffset'];
   if (exif_off != null && ![1,2,5,6,10].contains(exif_off.field_type)) {
     // print('** Exif SubIFD at offset ${exif_off.values[0]}:');
-    hdr.dump_ifd(exif_off.values[0], 'EXIF', stop_tag: stop_tag);
+    await hdr.dump_ifd(exif_off.values[0], 'EXIF', stop_tag: stop_tag);
   }
 
   // deal with MakerNote contained in EXIF IFD
@@ -232,13 +234,13 @@ Future<Map<String, IfdTag>> readExifFromFile(File file,
   if (details &&
       hdr.tags.containsKey('EXIF MakerNote') &&
       hdr.tags.containsKey('Image Make')) {
-    hdr.decode_maker_note();
+    await hdr.decode_maker_note();
   }
 
   // extract thumbnails
   if (details && thumb_ifd != 0) {
-    hdr.extract_tiff_thumbnail(thumb_ifd);
-    hdr.extract_jpeg_thumbnail();
+    await hdr.extract_tiff_thumbnail(thumb_ifd);
+    await hdr.extract_jpeg_thumbnail();
   }
 
   // parse XMP tags (experimental)

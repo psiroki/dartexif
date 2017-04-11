@@ -1,4 +1,3 @@
-import 'package:sprintf/sprintf.dart' show sprintf;
 import 'util.dart';
 import 'tags_info.dart' show MakerTag, MakerTagFunc, tags_base;
 
@@ -32,12 +31,12 @@ class makernote_olympus extends tags_base {
     if (v == null || v.isEmpty) {
       return '';
     }
-    
+
     if (v == null || v.length < 3 || (!mode1.containsKey(v[0]) || !mode2.containsKey(v[2]))) {
       return v.toString();
     }
 
-    return sprintf('%s - sequence %d - %s', [mode1[v[0]], v[1], mode2[v[2]]]);
+    return "${mode1[v[0]]} - sequence ${v[1]} - ${mode2[v[2]]}";
   }
 
   static Map<int, MakerTag> _build_tags() {

@@ -1,4 +1,3 @@
-import 'package:sprintf/sprintf.dart' show sprintf;
 import 'tags_info.dart' show MakerTag, MakerTagFunc, tags_base;
 import 'util.dart';
 import 'exif_types.dart';
@@ -67,7 +66,7 @@ class makernote_nikon extends tags_base {
     a = a % step;
 
     if (whole != 0) {
-      ret_str = sprintf('%s%s ', [ret_str, whole.toString()]);
+      ret_str = "${ret_str}${whole} ";
     }
 
     if (a == 0) {

@@ -1,6 +1,3 @@
-import 'package:collection/collection.dart' show ListEquality;
-import 'package:sprintf/sprintf.dart' show sprintf;
-
 bool list_range_eq(List list1, int begin, int end, List list2) {
   begin = begin >= 0 ? begin : 0;
   begin = begin < list1.length ? begin : list1.length;
@@ -10,11 +7,18 @@ bool list_range_eq(List list1, int begin, int end, List list2) {
   return list_eq(list1.sublist(begin, end), list2);
 }
 
-Function list_eq = const ListEquality().equals;
+bool list_eq<T>(List<T> e1, List<T> e2) {
+  if (identical(e1, e2)) return true;
+  if (e1 == null || e2 == null) return false;
+  int length = e1.length;
+  if (length != e2.length) return false;
+  for (int i = 0; i < length; i++) {
+    if (e1[i] != e2[i]) return false;
+  }
+  return true;
+}
 
-list_in<T>(T a, List<T> b) => b.any((i) => list_eq(i, a));
-
-printf(a, b) => print(sprintf(a, b));
+bool list_in<T extends List>(T a, List<T> b) => b.any((i) => list_eq(i, a));
 
 // Don't throw an exception when given an out of range character.
 String make_string(List<int> seq) {
