@@ -15,6 +15,7 @@ Add this to your package's pubspec.yaml file:
 ```YAML
 dependencies:
   webexif:
+    git: https://github.com/psiroki/webexif.git
 ```
 
 ### Install it
